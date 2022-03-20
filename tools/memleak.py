@@ -4,8 +4,8 @@
 #           memory leaks in user-mode processes and the kernel.
 #
 # USAGE: memleak [-h] [-p PID] [-t] [-a] [-o OLDER] [-c COMMAND]
-#                [--combined-only] [-s SAMPLE_RATE] [-T TOP] [-z MIN_SIZE]
-#                [-Z MAX_SIZE] [-O OBJ]
+#                [--combined-only] [--wa-missing-free] [-s SAMPLE_RATE]
+#                [-T TOP] [-z MIN_SIZE] [-Z MAX_SIZE] [-O OBJ]
 #                [interval] [count]
 #
 # Licensed under the Apache License, Version 2.0 (the "License")
@@ -88,6 +88,8 @@ parser.add_argument("-c", "--command",
         help="execute and trace the specified command")
 parser.add_argument("--combined-only", default=False, action="store_true",
         help="show combined allocation statistics only")
+parser.add_argument("--wa-missing-free", default=False, action="store_true",
+        help="Workaround to alleviate misjudgments when free is missing")
 parser.add_argument("-s", "--sample-rate", default=1, type=int,
         help="sample every N-th allocation to decrease the overhead")
 parser.add_argument("-T", "--top", type=int, default=10,
@@ -207,10 +209,12 @@ static inline int gen_alloc_exit2(struct pt_regs *ctx, u64 address) {
         info.size = *size64;
         sizes.delete(&pid);
 
-        info.timestamp_ns = bpf_ktime_get_ns();
-        info.stack_id = stack_traces.get_stackid(ctx, STACK_FLAGS);
-        allocs.update(&address, &info);
-        update_statistics_add(info.stack_id, info.size);
+        if (address != 0) {
+                info.timestamp_ns = bpf_ktime_get_ns();
+                info.stack_id = stack_traces.get_stackid(ctx, STACK_FLAGS);
+                allocs.update(&address, &info);
+                update_statistics_add(info.stack_id, info.size);
+        }
 
         if (SHOULD_PRINT) {
                 bpf_trace_printk("alloc exited, size = %lu, result = %lx\\n",
@@ -268,6 +272,19 @@ int realloc_exit(struct pt_regs *ctx) {
         return gen_alloc_exit(ctx);
 }
 
+int mmap_enter(struct pt_regs *ctx) {
+        size_t size = (size_t)PT_REGS_PARM2(ctx);
+        return gen_alloc_enter(ctx, size);
+}
+
+int mmap_exit(struct pt_regs *ctx) {
+        return gen_alloc_exit(ctx);
+}
+
+int munmap_enter(struct pt_regs *ctx, void *address) {
+        return gen_free_enter(ctx, address);
+}
+
 int posix_memalign_enter(struct pt_regs *ctx, void **memptr, size_t alignment,
                          size_t size) {
         u64 memptr64 = (u64)(size_t)memptr;
@@ -287,7 +304,7 @@ int posix_memalign_exit(struct pt_regs *ctx) {
 
         memptrs.delete(&pid);
 
-        if (bpf_probe_read(&addr, sizeof(void*), (void*)(size_t)*memptr64))
+        if (bpf_probe_read_user(&addr, sizeof(void*), (void*)(size_t)*memptr64))
                 return 0;
 
         u64 addr64 = (u64)(size_t)addr;
@@ -330,11 +347,15 @@ int pvalloc_exit(struct pt_regs *ctx) {
 bpf_source_kernel = """
 
 TRACEPOINT_PROBE(kmem, kmalloc) {
+        if (WORKAROUND_MISSING_FREE)
+            gen_free_enter((struct pt_regs *)args, (void *)args->ptr);
         gen_alloc_enter((struct pt_regs *)args, args->bytes_alloc);
         return gen_alloc_exit2((struct pt_regs *)args, (size_t)args->ptr);
 }
 
 TRACEPOINT_PROBE(kmem, kmalloc_node) {
+        if (WORKAROUND_MISSING_FREE)
+            gen_free_enter((struct pt_regs *)args, (void *)args->ptr);
         gen_alloc_enter((struct pt_regs *)args, args->bytes_alloc);
         return gen_alloc_exit2((struct pt_regs *)args, (size_t)args->ptr);
 }
@@ -344,11 +365,15 @@ TRACEPOINT_PROBE(kmem, kfree) {
 }
 
 TRACEPOINT_PROBE(kmem, kmem_cache_alloc) {
+        if (WORKAROUND_MISSING_FREE)
+            gen_free_enter((struct pt_regs *)args, (void *)args->ptr);
         gen_alloc_enter((struct pt_regs *)args, args->bytes_alloc);
         return gen_alloc_exit2((struct pt_regs *)args, (size_t)args->ptr);
 }
 
 TRACEPOINT_PROBE(kmem, kmem_cache_alloc_node) {
+        if (WORKAROUND_MISSING_FREE)
+            gen_free_enter((struct pt_regs *)args, (void *)args->ptr);
         gen_alloc_enter((struct pt_regs *)args, args->bytes_alloc);
         return gen_alloc_exit2((struct pt_regs *)args, (size_t)args->ptr);
 }
@@ -384,6 +409,10 @@ if kernel_trace:
                 bpf_source += bpf_source_percpu
         else:
                 bpf_source += bpf_source_kernel
+
+if kernel_trace:
+    bpf_source = bpf_source.replace("WORKAROUND_MISSING_FREE", "1"
+                                    if args.wa_missing_free else "0")
 
 bpf_source = bpf_source.replace("SHOULD_PRINT", "1" if trace_all else "0")
 bpf_source = bpf_source.replace("SAMPLE_EVERY_N", str(sample_every_n))
@@ -433,12 +462,15 @@ if not kernel_trace:
         attach_probes("malloc")
         attach_probes("calloc")
         attach_probes("realloc")
+        attach_probes("mmap")
         attach_probes("posix_memalign")
-        attach_probes("valloc")
+        attach_probes("valloc", can_fail=True) # failed on Android, is deprecated in libc.so from bionic directory
         attach_probes("memalign")
-        attach_probes("pvalloc")
+        attach_probes("pvalloc", can_fail=True) # failed on Android, is deprecated in libc.so from bionic directory
         attach_probes("aligned_alloc", can_fail=True)  # added in C11
         bpf.attach_uprobe(name=obj, sym="free", fn_name="free_enter",
+                                  pid=pid)
+        bpf.attach_uprobe(name=obj, sym="munmap", fn_name="munmap_enter",
                                   pid=pid)
 
 else:
@@ -478,7 +510,7 @@ def print_outstanding():
                         stack = list(stack_traces.walk(info.stack_id))
                         combined = []
                         for addr in stack:
-                                combined.append(bpf.sym(addr, pid,
+                                combined.append(('0x'+format(addr, '016x')+'\t').encode('utf-8') + bpf.sym(addr, pid,
                                         show_module=True, show_offset=True))
                         alloc_info[info.stack_id] = Allocation(combined,
                                                                info.size)

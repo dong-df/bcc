@@ -5,7 +5,7 @@
 # tcpstates   Trace the TCP session state changes with durations.
 #             For Linux, uses BCC, BPF. Embedded C.
 #
-# USAGE: tcpstates [-h] [-C] [-S] [interval [count]]
+# USAGE: tcpstates [-h] [-C] [-S] [interval [count]] [-4 | -6]
 #
 # This uses the sock:inet_sock_set_state tracepoint, added to Linux 4.16.
 # Linux 4.16 also adds more state transitions so that they can be traced.
@@ -28,12 +28,14 @@ examples = """examples:
     ./tcpstates           # trace all TCP state changes
     ./tcpstates -t        # include timestamp column
     ./tcpstates -T        # include time column (HH:MM:SS)
-    ./tcpstates -w        # wider colums (fit IPv6)
+    ./tcpstates -w        # wider columns (fit IPv6)
     ./tcpstates -stT      # csv output, with times & timestamps
     ./tcpstates -Y        # log events to the systemd journal
     ./tcpstates -L 80     # only trace local port 80
     ./tcpstates -L 80,81  # only trace local ports 80 and 81
     ./tcpstates -D 80     # only trace remote port 80
+    ./tcpstates -4        # trace IPv4 family only
+    ./tcpstates -6        # trace IPv6 family only
 """
 parser = argparse.ArgumentParser(
     description="Trace TCP session state changes and durations",
@@ -55,13 +57,17 @@ parser.add_argument("--ebpf", action="store_true",
     help=argparse.SUPPRESS)
 parser.add_argument("-Y", "--journal", action="store_true",
     help="log session state changes to the systemd journal")
+group = parser.add_mutually_exclusive_group()
+group.add_argument("-4", "--ipv4", action="store_true",
+    help="trace IPv4 family only")
+group.add_argument("-6", "--ipv6", action="store_true",
+    help="trace IPv6 family only")
 args = parser.parse_args()
 debug = 0
 
 # define BPF program
-bpf_text = """
+bpf_header = """
 #include <uapi/linux/ptrace.h>
-#define KBUILD_MODNAME "foo"
 #include <linux/tcp.h>
 #include <net/sock.h>
 #include <bcc/proto.h>
@@ -96,12 +102,9 @@ struct ipv6_data_t {
     char task[TASK_COMM_LEN];
 };
 BPF_PERF_OUTPUT(ipv6_events);
+"""
 
-struct id_t {
-    u32 pid;
-    char task[TASK_COMM_LEN];
-};
-
+bpf_text_tracepoint = """
 TRACEPOINT_PROBE(sock, inet_sock_set_state)
 {
     if (args->protocol != IPPROTO_TCP)
@@ -126,6 +129,8 @@ TRACEPOINT_PROBE(sock, inet_sock_set_state)
         delta_us = 0;
     else
         delta_us = (bpf_ktime_get_ns() - *tsp) / 1000;
+    u16 family = args->family;
+    FILTER_FAMILY
 
     if (args->family == AF_INET) {
         struct ipv4_data_t data4 = {
@@ -159,17 +164,94 @@ TRACEPOINT_PROBE(sock, inet_sock_set_state)
         ipv6_events.perf_submit(args, &data6, sizeof(data6));
     }
 
-    u64 ts = bpf_ktime_get_ns();
-    last.update(&sk, &ts);
+    if (args->newstate == TCP_CLOSE) {
+        last.delete(&sk);
+    } else {
+        u64 ts = bpf_ktime_get_ns();
+        last.update(&sk, &ts);
+    }
 
     return 0;
 }
 """
 
-if (not BPF.tracepoint_exists("sock", "inet_sock_set_state")):
-    print("ERROR: tracepoint sock:inet_sock_set_state missing "
-        "(added in Linux 4.16). Exiting")
-    exit()
+bpf_text_kprobe = """
+int kprobe__tcp_set_state(struct pt_regs *ctx, struct sock *sk, int state)
+{
+    u32 pid = bpf_get_current_pid_tgid() >> 32;
+    // sk is used as a UUID
+
+    // lport is either used in a filter here, or later
+    u16 lport = sk->__sk_common.skc_num;
+    FILTER_LPORT
+
+    // dport is either used in a filter here, or later
+    u16 dport = sk->__sk_common.skc_dport;
+    dport = ntohs(dport);
+    FILTER_DPORT
+
+    // calculate delta
+    u64 *tsp, delta_us;
+    tsp = last.lookup(&sk);
+    if (tsp == 0)
+        delta_us = 0;
+    else
+        delta_us = (bpf_ktime_get_ns() - *tsp) / 1000;
+
+    u16 family = sk->__sk_common.skc_family;
+    FILTER_FAMILY
+
+    if (family == AF_INET) {
+        struct ipv4_data_t data4 = {
+            .span_us = delta_us,
+            .oldstate = sk->__sk_common.skc_state,
+            .newstate = state };
+        data4.skaddr = (u64)sk;
+        data4.ts_us = bpf_ktime_get_ns() / 1000;
+        data4.saddr = sk->__sk_common.skc_rcv_saddr;
+        data4.daddr = sk->__sk_common.skc_daddr;
+        // a workaround until data4 compiles with separate lport/dport
+        data4.ports = dport + ((0ULL + lport) << 16);
+        data4.pid = pid;
+
+        bpf_get_current_comm(&data4.task, sizeof(data4.task));
+        ipv4_events.perf_submit(ctx, &data4, sizeof(data4));
+
+    } else /* 6 */ {
+        struct ipv6_data_t data6 = {
+            .span_us = delta_us,
+            .oldstate = sk->__sk_common.skc_state,
+            .newstate = state };
+        data6.skaddr = (u64)sk;
+        data6.ts_us = bpf_ktime_get_ns() / 1000;
+        bpf_probe_read_kernel(&data6.saddr, sizeof(data6.saddr),
+            sk->__sk_common.skc_v6_rcv_saddr.in6_u.u6_addr32);
+        bpf_probe_read_kernel(&data6.daddr, sizeof(data6.daddr),
+            sk->__sk_common.skc_v6_daddr.in6_u.u6_addr32);
+        // a workaround until data6 compiles with separate lport/dport
+        data6.ports = dport + ((0ULL + lport) << 16);
+        data6.pid = pid;
+        bpf_get_current_comm(&data6.task, sizeof(data6.task));
+        ipv6_events.perf_submit(ctx, &data6, sizeof(data6));
+    }
+
+    if (state == TCP_CLOSE) {
+        last.delete(&sk);
+    } else {
+        u64 ts = bpf_ktime_get_ns();
+        last.update(&sk, &ts);
+    }
+
+    return 0;
+
+};
+"""
+
+bpf_text = bpf_header
+if BPF.tracepoint_exists("sock", "inet_sock_set_state"):
+    bpf_text += bpf_text_tracepoint
+else:
+    bpf_text += bpf_text_kprobe
 
 # code substitutions
 if args.remoteport:
@@ -182,6 +264,13 @@ if args.localport:
     lports_if = ' && '.join(['lport != %d' % lport for lport in lports])
     bpf_text = bpf_text.replace('FILTER_LPORT',
         'if (%s) { last.delete(&sk); return 0; }' % lports_if)
+if args.ipv4:
+    bpf_text = bpf_text.replace('FILTER_FAMILY',
+        'if (family != AF_INET) { return 0; }')
+elif args.ipv6:
+    bpf_text = bpf_text.replace('FILTER_FAMILY',
+        'if (family != AF_INET6) { return 0; }')
+bpf_text = bpf_text.replace('FILTER_FAMILY', '')
 bpf_text = bpf_text.replace('FILTER_DPORT', '')
 bpf_text = bpf_text.replace('FILTER_LPORT', '')
 

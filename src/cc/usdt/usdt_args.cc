@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <cmath>
 #include <unordered_map>
 #include <regex>
 
@@ -31,6 +32,17 @@ Argument::~Argument() {}
 std::string Argument::ctype() const {
   const int s = arg_size() * 8;
   return (s < 0) ? tfm::format("int%d_t", -s) : tfm::format("uint%d_t", s);
+}
+
+static const char *type_names[][4] = {
+  { "int8_t", "int16_t", "int32_t", "int64_t" },
+  { "uint8_t", "uint16_t", "uint32_t", "uint64_t" },
+};
+
+const char *Argument::ctype_name() const {
+  const int s = arg_size();
+  const int r = log2(abs(s));
+  return s < 0 ? type_names[0][r] : type_names[1][r];
 }
 
 bool Argument::get_global_address(uint64_t *address, const std::string &binpath,
@@ -178,16 +190,27 @@ bool ArgumentParser_aarch64::parse_size(ssize_t pos, ssize_t &new_pos,
 }
 
 bool ArgumentParser_aarch64::parse_mem(ssize_t pos, ssize_t &new_pos,
-                                       std::string &reg_name,
-                                       optional<int> *offset) {
-  if (parse_register(pos, new_pos, reg_name) == false)
+                                       Argument *dest) {
+  std::string base_reg_name, index_reg_name;
+
+  if (parse_register(pos, new_pos, base_reg_name) == false)
     return false;
+  dest->base_register_name_ = base_reg_name;
 
   if (arg_[new_pos] == ',') {
     pos = new_pos + 1;
-    new_pos = parse_number(pos, offset);
-    if (new_pos == pos)
-      return error_return(pos, pos);
+    new_pos = parse_number(pos, &dest->deref_offset_);
+    if (new_pos == pos) {
+      // offset isn't a number, so it should be a reg,
+      // which looks like: -1@[x0, x1], rather than -1@[x0, 24]
+      skip_whitespace_from(pos);
+      pos = cur_pos_;
+      if (parse_register(pos, new_pos, index_reg_name) == false)
+        return error_return(pos, pos);
+      dest->index_register_name_ = index_reg_name;
+      dest->scale_ = 1;
+      dest->deref_offset_ = 0;
+    }
   }
   if (arg_[new_pos] != ']')
     return error_return(new_pos, new_pos);
@@ -202,6 +225,7 @@ bool ArgumentParser_aarch64::parse(Argument *dest) {
   // Support the following argument patterns:
   //   [-]<size>@<value>, [-]<size>@<reg>, [-]<size>@[<reg>], or
   //   [-]<size>@[<reg>,<offset>]
+  //   [-]<size>@[<reg>,<index_reg>]
   ssize_t cur_pos = cur_pos_, new_pos;
   optional<int> arg_size;
 
@@ -224,14 +248,10 @@ bool ArgumentParser_aarch64::parse(Argument *dest) {
     cur_pos_ = new_pos;
     dest->base_register_name_ = reg_name;
   } else if (arg_[cur_pos] == '[') {
-    // Parse ...@[<reg>] and ...@[<reg,<offset>]
-    optional<int> offset = 0;
-    std::string reg_name;
-    if (parse_mem(cur_pos + 1, new_pos, reg_name, &offset) == false)
+    // Parse ...@[<reg>], ...@[<reg,<offset>] and ...@[<reg>,<index_reg>]
+    if (parse_mem(cur_pos + 1, new_pos, dest) == false)
       return false;
     cur_pos_ = new_pos;
-    dest->base_register_name_ = reg_name;
-    dest->deref_offset_ = offset;
   } else {
     // Parse ...@<value>
     optional<long long> val;

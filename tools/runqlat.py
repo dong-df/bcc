@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 # @lint-avoid-python-3-compatibility-imports
 #
 # runqlat   Run queue (scheduler) latency as a histogram.
@@ -85,8 +85,6 @@ typedef struct pidns_key {
 
 BPF_HASH(start, u32);
 STORAGE
-
-struct rq;
 
 // record enqueue timestamp
 static int trace_enqueue(u32 tgid, u32 pid)

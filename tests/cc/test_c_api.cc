@@ -34,6 +34,7 @@
 
 #include "catch.hpp"
 
+
 using namespace std;
 
 static pid_t spawn_child(void *, bool, bool, int (*)(void *));
@@ -309,7 +310,11 @@ TEST_CASE("resolve symbol addresses for a given PID", "[c_api]") {
     REQUIRE(bcc_symcache_resolve_name(lazy_resolver, "/tmp/libz.so.1", "zlibVersion",
         &lazy_addr) == 0);
     REQUIRE(lazy_addr == addr);
+    bcc_free_symcache(resolver, child);
+    bcc_free_symcache(lazy_resolver, child);
   }
+  bcc_free_symcache(resolver, getpid());
+  bcc_free_symcache(lazy_resolver, getpid());
 }
 
 #define STACK_SIZE (1024 * 1024)
@@ -412,6 +417,8 @@ TEST_CASE("resolve symbols using /tmp/perf-pid.map", "[c_api]") {
     REQUIRE(sym.module);
     REQUIRE(string(sym.module) == perf_map_path(child));
     REQUIRE(string("right_next_door_fn") == sym.name);
+    bcc_free_symcache(resolver, child);
+
   }
 
   SECTION("separate namespace") {
@@ -428,6 +435,7 @@ TEST_CASE("resolve symbols using /tmp/perf-pid.map", "[c_api]") {
     REQUIRE(string(sym.module) == perf_map_path(1));
     REQUIRE(string("dummy_fn") == sym.name);
     unlink("/tmp/perf-1.map");
+    bcc_free_symcache(resolver, child);
   }
 
   SECTION("separate pid and mount namespace") {
@@ -444,6 +452,7 @@ TEST_CASE("resolve symbols using /tmp/perf-pid.map", "[c_api]") {
     // child is PID 1 in its namespace
     REQUIRE(string(sym.module) == perf_map_path(1));
     REQUIRE(string("dummy_fn") == sym.name);
+    bcc_free_symcache(resolver, child);
   }
 
   SECTION("separate pid and mount namespace, perf-map in host") {
@@ -465,6 +474,7 @@ TEST_CASE("resolve symbols using /tmp/perf-pid.map", "[c_api]") {
     REQUIRE(string("dummy_fn") == sym.name);
 
     unlink(path.c_str());
+    bcc_free_symcache(resolver, child);
   }
 
 
@@ -486,7 +496,8 @@ struct mod_search {
 };
 
 TEST_CASE("searching for modules in /proc/[pid]/maps", "[c_api][!mayfail]") {
-  FILE *dummy_maps = fopen("dummy_proc_map.txt", "r");
+  std::string dummy_maps_path = CMAKE_CURRENT_BINARY_DIR + std::string("/dummy_proc_map.txt");
+  FILE *dummy_maps = fopen(dummy_maps_path.c_str(), "r");
   REQUIRE(dummy_maps != NULL);
 
   SECTION("name match") {
@@ -598,6 +609,7 @@ TEST_CASE("resolve global addr in libc in this process", "[c_api][!mayfail]") {
   res = bcc_resolve_global_addr(pid, sopath, local_addr, 0, &global_addr);
   REQUIRE(res == 0);
   REQUIRE(global_addr == (search.start + local_addr - search.file_offset));
+  free(sopath);
 }
 
 /* Consider the following scenario: we have some process that maps in a shared library [1] with a

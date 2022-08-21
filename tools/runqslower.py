@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 # @lint-avoid-python-3-compatibility-imports
 #
 # runqslower    Trace long process scheduling delays.
@@ -75,8 +75,6 @@ bpf_text = """
 #include <linux/pid_namespace.h>
 
 BPF_HASH(start, u32);
-
-struct rq;
 
 struct data_t {
     u32 pid;

@@ -9,12 +9,21 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/frontends/b)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/frontends/clang)
 include_directories(${LLVM_INCLUDE_DIRS})
 include_directories(${LIBELF_INCLUDE_DIRS})
-if (LIBDEBUGINFOD_FOUND)
+if (LIBLZMA_FOUND)
+  include_directories(${LIBLZMA_INCLUDE_DIRS})
+endif(LIBLZMA_FOUND)
+if (LIBDEBUGINFOD_FOUND AND ENABLE_LIBDEBUGINFOD)
   include_directories(${LIBDEBUGINFOD_INCLUDE_DIRS})
-endif (LIBDEBUGINFOD_FOUND)
+endif (LIBDEBUGINFOD_FOUND AND ENABLE_LIBDEBUGINFOD)
 # todo: if check for kernel version
 if (CMAKE_USE_LIBBPF_PACKAGE AND LIBBPF_FOUND)
   include_directories(${LIBBPF_INCLUDE_DIRS})
+  # create up-to-date linux/bpf.h from virtual_bpf.h (remove string wrapper);
+  # when libbpf is built as a submodule we use its version of linux/bpf.h
+  # so this does similar for the libbpf package, removing reliance on the
+  # system uapi header which can be out of date.
+  execute_process(COMMAND sh -c "cd ${CMAKE_CURRENT_SOURCE_DIR}/compat/linux && grep -ve '\\*\\*\\*\\*' virtual_bpf.h > bpf.h")
+  include_directories(${CMAKE_CURRENT_SOURCE_DIR}/compat)
 else()
   include_directories(${CMAKE_CURRENT_SOURCE_DIR}/libbpf/include)
   include_directories(${CMAKE_CURRENT_SOURCE_DIR}/libbpf/include/uapi)
@@ -110,6 +119,9 @@ add_library(bpf-shared SHARED ${bpf_sources})
 set_target_properties(bpf-shared PROPERTIES VERSION ${REVISION_LAST} SOVERSION 0)
 set_target_properties(bpf-shared PROPERTIES OUTPUT_NAME bcc_bpf)
 target_link_libraries(bpf-shared elf z)
+if(LIBLZMA_FOUND)
+  target_link_libraries(bpf-shared ${LIBLZMA_LIBRARIES})
+endif(LIBLZMA_FOUND)
 if(LIBDEBUGINFOD_FOUND)
   target_link_libraries(bpf-shared ${LIBDEBUGINFOD_LIBRARIES})
 endif(LIBDEBUGINFOD_FOUND)
@@ -126,6 +138,9 @@ set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${llvm_lib_exclude_f
 set(bcc_common_libs clang_frontend
   -Wl,--whole-archive ${clang_libs} ${llvm_libs} -Wl,--no-whole-archive
   ${LIBELF_LIBRARIES})
+if (LIBLZMA_FOUND)
+  list(APPEND bcc_common_libs ${LIBLZMA_LIBRARIES})
+endif (LIBLZMA_FOUND)
 if (LIBDEBUGINFOD_FOUND)
   list(APPEND bcc_common_libs ${LIBDEBUGINFOD_LIBRARIES})
 endif (LIBDEBUGINFOD_FOUND)

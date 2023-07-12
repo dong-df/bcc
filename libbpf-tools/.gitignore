@@ -31,6 +31,7 @@
 /klockstat
 /ksnoop
 /llcstat
+/memleak
 /mdflush
 /mountsnoop
 /nfsdist
@@ -52,6 +53,7 @@
 /tcpconnect
 /tcpconnlat
 /tcplife
+/tcppktlat
 /tcptracer
 /tcprtt
 /tcpstates

@@ -1,7 +1,7 @@
 ARG VERSION="20.04"
 FROM ubuntu:${VERSION}
 
-ARG LLVM_VERSION="11"
+ARG LLVM_VERSION="12"
 ENV LLVM_VERSION=$LLVM_VERSION
 
 ARG SHORTNAME="focal"
@@ -58,6 +58,7 @@ RUN /bin/bash -c 'apt-get update && apt-get install -y \
       bridge-utils \
       libtinfo5 \
       libtinfo-dev \
+      libzstd-dev \
       xz-utils \
       zip && \
       read -ra versions <<<"${LLVM_VERSION}" && \
@@ -80,7 +81,7 @@ done \
 && \
       apt-get -y clean'
 
-RUN pip3 install pyroute2==0.5.18 netaddr==0.8.0 dnslib==0.9.14 cachetools==3.1.1
+RUN pip3 install pyroute2==0.5.18 netaddr==0.8.0 dnslib==0.9.14 cachetools==3.1.1 pyelftools==0.30
 
 # FIXME this is faster than building from source, but it seems there is a bug
 # in probing libruby.so rather than ruby binary

@@ -233,7 +233,7 @@ static int print_stack(struct futexctn_bpf *obj, struct hist_key *info)
 			fprintf(stderr, "failed to get syms\n");
 		} else {
 			for (i = 0; i < env.perf_max_stack_depth && ip[i]; i++)
-				printf("    #%-2d 0x%016llx [unknown]\n", idx++, ip[i]);
+				printf("    #%-2d 0x%016lx [unknown]\n", idx++, ip[i]);
 		}
 		goto cleanup;
 	}
@@ -245,8 +245,10 @@ static int print_stack(struct futexctn_bpf *obj, struct hist_key *info)
 			else
 				printf("    [unknown]\n");
 		} else {
+			dso_name = NULL;
+			dso_offset = 0;
 			sym = syms__map_addr_dso(syms, ip[i], &dso_name, &dso_offset);
-			printf("    #%-2d 0x%016llx", idx++, ip[i]);
+			printf("    #%-2d 0x%016lx", idx++, ip[i]);
 			if (sym)
 				printf(" %s+0x%lx", sym->name, sym->offset);
 			if (dso_name)

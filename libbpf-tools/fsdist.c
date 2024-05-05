@@ -115,12 +115,12 @@ const char argp_program_doc[] =
 "    fsdist -t btrfs -m 5       # trace btrfs operation, 5s summaries, in ms\n";
 
 static const struct argp_option opts[] = {
-	{ "timestamp", 'T', NULL, 0, "Print timestamp" },
-	{ "milliseconds", 'm', NULL, 0, "Millisecond histogram" },
-	{ "pid", 'p', "PID", 0, "Process ID to trace" },
-	{ "type", 't', "Filesystem", 0, "Which filesystem to trace, [btrfs/ext4/nfs/xfs/f2fs]" },
-	{ "verbose", 'v', NULL, 0, "Verbose debug output" },
-	{ NULL, 'h', NULL, OPTION_HIDDEN, "Show the full help" },
+	{ "timestamp", 'T', NULL, 0, "Print timestamp", 0 },
+	{ "milliseconds", 'm', NULL, 0, "Millisecond histogram", 0 },
+	{ "pid", 'p', "PID", 0, "Process ID to trace", 0 },
+	{ "type", 't', "Filesystem", 0, "Which filesystem to trace, [btrfs/ext4/nfs/xfs/f2fs]", 0 },
+	{ "verbose", 'v', NULL, 0, "Verbose debug output", 0 },
+	{ NULL, 'h', NULL, OPTION_HIDDEN, "Show the full help", 0 },
 	{},
 };
 
@@ -195,15 +195,15 @@ static void alias_parse(char *prog)
 {
 	char *name = basename(prog);
 
-	if (!strcmp(name, "btrfsdist")) {
+	if (strstr(name, "btrfsdist")) {
 		fs_type = BTRFS;
-	} else if (!strcmp(name, "ext4dist")) {
+	} else if (strstr(name, "ext4dist")) {
 		fs_type = EXT4;
-	} else if (!strcmp(name, "nfsdist")) {
+	} else if (strstr(name, "nfsdist")) {
 		fs_type = NFS;
-	} else if (!strcmp(name, "xfsdist")) {
+	} else if (strstr(name, "xfsdist")) {
 		fs_type = XFS;
-	} else if (!strcmp(name, "f2fsdist")){
+	} else if (strstr(name, "f2fsdist")){
 		fs_type = F2FS;
 	}
 }

@@ -200,8 +200,8 @@ static const struct argp_option argp_options[] = {
 	{"wa-missing-free", 'F', 0, 0, "workaround to alleviate misjudgments when free is missing", 0 },
 	{"sample-rate", 's', "SAMPLE_RATE", 0, "sample every N-th allocation to decrease the overhead", 0 },
 	{"top", 'T', "TOP_STACKS", 0, "display only this many top allocating stacks (by size)", 0 },
-	{"min-size", 'z', "MIN_SIZE", 0, "capture only allocations larger than this size", 0 },
-	{"max-size", 'Z', "MAX_SIZE", 0, "capture only allocations smaller than this size", 0 },
+	{"min-size", 'z', "MIN_SIZE", 0, "capture only allocations larger than or equal to this size", 0 },
+	{"max-size", 'Z', "MAX_SIZE", 0, "capture only allocations smaller than or equal to this size", 0 },
 	{"obj", 'O', "OBJECT", 0, "attach to allocator functions in the specified object", 0 },
 	{"percpu", 'P', NULL, 0, "trace percpu allocations", 0 },
 	{"symbols-prefix", 'S', "SYMBOLS_PREFIX", 0, "memory allocator symbols prefix", 0 },
@@ -1060,9 +1060,15 @@ int attach_uprobes(struct memleak_bpf *skel)
 	if (strlen(env.symbols_prefix)) {
 		ATTACH_UPROBE(skel, mmap, mmap_enter);
 		ATTACH_URETPROBE(skel, mmap, mmap_exit);
+
+		ATTACH_UPROBE(skel, mremap, mmap_enter);
+		ATTACH_URETPROBE(skel, mremap, mmap_exit);
 	} else {
 		ATTACH_UPROBE_CHECKED(skel, mmap, mmap_enter);
 		ATTACH_URETPROBE_CHECKED(skel, mmap, mmap_exit);
+
+		ATTACH_UPROBE_CHECKED(skel, mremap, mremap_enter);
+		ATTACH_URETPROBE_CHECKED(skel, mremap, mremap_exit);
 	}
 
 	ATTACH_UPROBE_CHECKED(skel, posix_memalign, posix_memalign_enter);

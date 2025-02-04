@@ -758,11 +758,7 @@ bool ProbeVisitor::IsContextMemberExpr(Expr *E) {
 
 SourceRange
 ProbeVisitor::expansionRange(SourceRange range) {
-#if LLVM_VERSION_MAJOR >= 7
   return rewriter_.getSourceMgr().getExpansionRange(range).getAsRange();
-#else
-  return rewriter_.getSourceMgr().getExpansionRange(range);
-#endif
 }
 
 SourceLocation
@@ -1380,7 +1376,11 @@ bool BTypeVisitor::VisitBinaryOperator(BinaryOperator *E) {
             }
 
             uint64_t ofs = C.getFieldOffset(F);
+#if LLVM_VERSION_MAJOR >= 20
+            uint64_t sz = F->isBitField() ? F->getBitWidthValue() : C.getTypeSize(F->getType());
+#else
             uint64_t sz = F->isBitField() ? F->getBitWidthValue(C) : C.getTypeSize(F->getType());
+#endif
             string base = rewriter_.getRewrittenText(expansionRange(Base->getSourceRange()));
             string text = "bpf_dins_pkt(" + fn_args_[0]->getName().str() + ", (u64)" + base + "+" + to_string(ofs >> 3)
                 + ", " + to_string(ofs & 0x7) + ", " + to_string(sz) + ",";
@@ -1410,7 +1410,11 @@ bool BTypeVisitor::VisitImplicitCastExpr(ImplicitCastExpr *E) {
             return false;
           }
           uint64_t ofs = C.getFieldOffset(F);
+#if LLVM_VERSION_MAJOR >= 20
+          uint64_t sz = F->isBitField() ? F->getBitWidthValue() : C.getTypeSize(F->getType());
+#else
           uint64_t sz = F->isBitField() ? F->getBitWidthValue(C) : C.getTypeSize(F->getType());
+#endif
           string text = "bpf_dext_pkt(" + fn_args_[0]->getName().str() + ", (u64)" + Ref->getDecl()->getName().str() + "+"
               + to_string(ofs >> 3) + ", " + to_string(ofs & 0x7) + ", " + to_string(sz) + ")";
           rewriter_.ReplaceText(expansionRange(E->getSourceRange()), text);
@@ -1423,11 +1427,7 @@ bool BTypeVisitor::VisitImplicitCastExpr(ImplicitCastExpr *E) {
 
 SourceRange
 BTypeVisitor::expansionRange(SourceRange range) {
-#if LLVM_VERSION_MAJOR >= 7
   return rewriter_.getSourceMgr().getExpansionRange(range).getAsRange();
-#else
-  return rewriter_.getSourceMgr().getExpansionRange(range);
-#endif
 }
 
 template <unsigned N>
@@ -1446,17 +1446,10 @@ int64_t BTypeVisitor::getFieldValue(VarDecl *Decl, FieldDecl *FDecl, int64_t Ori
   unsigned idx = FDecl->getFieldIndex();
 
   if (auto I = dyn_cast_or_null<InitListExpr>(Decl->getInit())) {
-#if LLVM_VERSION_MAJOR >= 8
     Expr::EvalResult res;
     if (I->getInit(idx)->EvaluateAsInt(res, C)) {
       return res.Val.getInt().getExtValue();
     }
-#else
-    llvm::APSInt res;
-    if (I->getInit(idx)->EvaluateAsInt(res, C)) {
-      return res.getExtValue();
-    }
-#endif
   }
 
   return OrigFValue;
@@ -1863,17 +1856,10 @@ void BFrontendAction::EndSourceFileAction() {
 
   if (flags_ & DEBUG_PREPROCESSOR)
     rewriter_->getEditBuffer(rewriter_->getSourceMgr().getMainFileID()).write(llvm::errs());
-#if LLVM_VERSION_MAJOR >= 9
+
   llvm::raw_string_ostream tmp_os(mod_src_);
   rewriter_->getEditBuffer(rewriter_->getSourceMgr().getMainFileID())
       .write(tmp_os);
-#else
-  if (flags_ & DEBUG_SOURCE) {
-    llvm::raw_string_ostream tmp_os(mod_src_);
-    rewriter_->getEditBuffer(rewriter_->getSourceMgr().getMainFileID())
-        .write(tmp_os);
-  }
-#endif
 
   for (auto func : func_range_) {
     auto f = func.first;
